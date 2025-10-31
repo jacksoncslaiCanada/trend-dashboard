@@ -26,56 +26,57 @@ if "postgresql+psycopg" not in PGURL:
 
 
 # ---- TEMP DEBUG: inspect connection string & connectivity ----
-# ---- robust parse of host/port ----
-from urllib.parse import urlsplit
-import re, streamlit as st
+import streamlit as st
+from urllib.parse import urlsplit, parse_qs
+import socket, psycopg, re
 
-def _mask(url: str) -> str:
-    try:
-        scheme, rest = url.split("://", 1)
-        creds, hostpart = rest.split("@", 1)
-        user = creds.split(":", 1)[0]
-        return f"{scheme}://{user}:***@{hostpart}"
-    except Exception:
-        return url
+st.markdown("### 🔧 DB Connection Debug (temporary)")
 
+PGURL = (os.environ.get("PGURL_VIEW") or os.environ.get("PGURL") or "").strip()
+if not PGURL:
+    st.error("❌ PGURL_VIEW/PGURL is empty or not set. Check Streamlit secrets."); st.stop()
+
+# Force psycopg driver if missing
+if "postgresql+psycopg" not in PGURL:
+    PGURL = PGURL.replace("postgresql://", "postgresql+psycopg://")
+
+# --- Safe parse host/port/sslmode ---
 sp = urlsplit(PGURL.replace("postgresql+psycopg", "postgresql"))
-netloc = sp.netloc or ""              # e.g. "analytics_ro:***@abc.pooler.supabase.com:6543"
-hostpart = netloc.split("@")[-1]      # drop credentials if present
-hostpart = hostpart.strip()
-
-# extract host and a numeric port if present
+netloc = sp.netloc or ""
+hostpart = netloc.split("@")[-1].strip()
 m = re.match(r"^(?P<host>[^:\s]+)(?::(?P<port>\d+))?$", hostpart)
 host = m.group("host") if m else hostpart
 port = int(m.group("port")) if (m and m.group("port")) else None
+qs = parse_qs(sp.query or "")
+sslmode = qs.get("sslmode", [""])[0]
 
-st.write("Engine URL:", _mask(PGURL))
+st.write("Engine URL (masked):", PGURL.split("@")[0] + ":***@" + host)
 st.write("Parsed host:", host)
 st.write("Parsed port:", port)
-st.write("SSL param present:", "sslmode=require" in (sp.query or ""))
+st.write("Parsed database:", sp.path.lstrip("/") or "(none)")
+st.write("sslmode param:", sslmode or "(none)")
 
-
-# Quick checks:
+# --- Quick validations ---
 st.write("✅ Driver ok:", PGURL.startswith("postgresql+psycopg://"))
-st.write("✅ Pooled host (.pooler.supabase.com):", host.endswith(".pooler.supabase.com"))
-st.write("✅ Port 6543:", port == 6543)
-st.write("✅ sslmode=require:", "sslmode=require" in ssl)
+st.write("✅ Host ends with .pooler.supabase.com:", host.endswith(".pooler.supabase.com"))
+st.write("✅ Port = 6543:", port == 6543)
+st.write("✅ sslmode=require:", sslmode == "require")
 
-# 2) DNS check
+# --- DNS check ---
 try:
-    dns = socket.gethostbyname_ex(host)
-    st.success(f"DNS OK: {dns[0]} -> {dns[2][:2]} (showing up to 2 IPs)")
+    ips = socket.gethostbyname_ex(host)[2]
+    st.success(f"DNS OK: {host} -> {ips[:2]} (showing first 2 IPs)")
 except Exception as e:
-    st.error(f"DNS lookup FAILED for '{host}': {e!r}")
+    st.error(f"❌ DNS lookup failed for '{host}': {e!r}")
 
-# 3) Raw psycopg connect (5s timeout) to surface the exact DB error
+# --- Raw psycopg connection test ---
 try:
-    # psycopg accepts the same URL used by SQLAlchemy's create_engine
     psycopg.connect(PGURL, connect_timeout=5).close()
-    st.success("psycopg.connect(): SUCCESS")
+    st.success("✅ psycopg.connect(): SUCCESS")
 except Exception as e:
-    st.error(f"psycopg.connect(): FAILED -> {type(e).__name__}: {e}")
-# ---- END TEMP DEBUG ----
+    st.error(f"❌ psycopg.connect() failed: {type(e).__name__}: {e}")
+# ---- END DEBUG ----
+
 
 engine = create_engine(PGURL, pool_pre_ping=True)
 
