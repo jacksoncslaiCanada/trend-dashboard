@@ -65,12 +65,19 @@ with st.expander("🔧 Secrets & DB connection debug (temporary)", expanded=Fals
             st.info("No host parsed for DNS test.")
     except Exception as e:
         st.error(f"DNS failed: {e!r}")
-    try:
-        psycopg.connect(PGURL, connect_timeout=5).close()
-        st.success("✅ psycopg.connect(): SUCCESS")
-    except Exception as e:
-        st.error(f"❌ psycopg.connect() failed: {type(e).__name__}: {e}")
 
+
+
+    # --- Raw psycopg connection test ---
+try:
+    # psycopg expects 'postgresql://' not 'postgresql+psycopg://'
+    dsn_for_psycopg = PGURL.replace("postgresql+psycopg://", "postgresql://", 1)
+    import psycopg
+    psycopg.connect(dsn_for_psycopg, connect_timeout=5).close()
+    st.success("✅ psycopg.connect(): SUCCESS")
+except Exception as e:
+    st.error(f"❌ psycopg.connect() failed: {type(e).__name__}: {e}")
+    
 # ---------- 3) Query helper ----------
 @st.cache_data(ttl=300)
 def q(sql: str, **params) -> pd.DataFrame:
