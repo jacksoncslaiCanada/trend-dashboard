@@ -1,0 +1,31 @@
+name: Weekly trend report
+
+on:
+  schedule:
+    - cron: "0 12 * * 5"   # Fridays 08:00 Toronto during EDT (~12:00 UTC)
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    env:
+      PGURL_VIEW: ${{ secrets.PGURL_VIEW }}   # use read-only pooled URL
+      SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+      REPORT_TO_EMAIL: ${{ secrets.REPORT_TO_EMAIL }}
+      REPORT_FROM_EMAIL: ${{ secrets.REPORT_FROM_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install report deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_report.txt
+      - name: Generate weekly report (PDF)
+        run: python make_weekly_report.py
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-report-${{ github.run_id }}
+          path: weekly_trends_*.pdf
