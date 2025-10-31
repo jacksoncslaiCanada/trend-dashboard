@@ -13,6 +13,18 @@ if not PGURL:
 if "postgresql+psycopg" not in PGURL:
     PGURL = PGURL.replace("postgresql://", "postgresql+psycopg://")
 
+# new block for fixing the string
+PGURL = (os.environ.get("PGURL_VIEW") or os.environ.get("PGURL") or "").strip()  # <-- trim
+if not PGURL:
+    raise SystemExit("Missing PGURL_VIEW/PGURL env var")
+
+# force psycopg driver if missing
+if "postgresql+psycopg" not in PGURL:
+    PGURL = PGURL.replace("postgresql://", "postgresql+psycopg://")
+
+# end of new block for fixing the string
+
+
 # ---- TEMP DEBUG: inspect connection string & connectivity ----
 import streamlit as st
 from urllib.parse import urlparse, unquote
