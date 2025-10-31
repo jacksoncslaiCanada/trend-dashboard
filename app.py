@@ -13,6 +13,23 @@ if not PGURL:
 if "postgresql+psycopg" not in PGURL:
     PGURL = PGURL.replace("postgresql://", "postgresql+psycopg://")
 
+# start added for debug
+import streamlit as st
+from urllib.parse import urlparse
+
+st.write("🔎 PGURL loaded:", "yes" if PGURL else "no")
+
+# Show parsed host/port to catch typos
+try:
+    p = urlparse(PGURL.replace("postgresql+psycopg", "postgresql"))
+    st.write("Host:", p.hostname)
+    st.write("Port:", p.port)
+    st.write("SSL param present:", "sslmode=require" in (p.query or ""))
+except Exception as e:
+    st.error(f"Could not parse PGURL: {e!r}")
+
+# end of debug
+
 engine = create_engine(PGURL, pool_pre_ping=True)
 
 @st.cache_data(ttl=300)
