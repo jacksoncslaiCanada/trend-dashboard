@@ -1,28 +1,32 @@
+# -----------------------------------------------------------
+# 1️⃣ Imports and page setup
+# -----------------------------------------------------------
 import os
-from datetime import datetime
+from urllib.parse import quote_plus
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
 
 st.set_page_config(page_title="Tech Trend Dashboard", layout="wide")
 
-# --- DB connection (read-only) ---
-PGURL = os.environ.get("PGURL_VIEW") or os.environ.get("PGURL")
-if not PGURL:
-    st.error("Missing PGURL_VIEW/PGURL environment variable."); st.stop()
-if "postgresql+psycopg" not in PGURL:
-    PGURL = PGURL.replace("postgresql://", "postgresql+psycopg://")
+# -----------------------------------------------------------
+# 2️⃣ Build PGURL safely from secrets (💡 insert THIS block here)
+# -----------------------------------------------------------
 
-# new block for fixing the string
-PGURL = (os.environ.get("PGURL_VIEW") or os.environ.get("PGURL") or "").strip()  # <-- trim
-if not PGURL:
-    raise SystemExit("Missing PGURL_VIEW/PGURL env var")
+# Read from Streamlit Secrets TOML (you added DB_HOST, DB_USER, etc.)
+host = (os.environ.get("DB_HOST") or "").strip()
+port = int(os.environ.get("DB_PORT", "6543"))
+name = (os.environ.get("DB_NAME") or "postgres").strip()
+user = (os.environ.get("DB_USER") or "analytics_ro").strip()
+pwd  = quote_plus(os.environ.get("DB_PASSWORD", ""))  # URL-encode safely
+ssl  = (os.environ.get("DB_SSLMODE") or "require").strip()
 
-# force psycopg driver if missing
-if "postgresql+psycopg" not in PGURL:
-    PGURL = PGURL.replace("postgresql://", "postgresql+psycopg://")
+if not (host and user and pwd):
+    st.error("Missing DB_* secrets. Please set DB_HOST/DB_USER/DB_PASSWORD in Secrets.")
+    st.stop()
 
-# end of new block for fixing the string
+PGURL = f"postgresql+psycopg://{user}:{pwd}@{host}:{port}/{name}?sslmode={ssl}"
+st.caption(f"Using host: {host}:{port}")  # optional visible sanity check
 
 
 # ---- TEMP DEBUG: inspect connection string & connectivity ----
