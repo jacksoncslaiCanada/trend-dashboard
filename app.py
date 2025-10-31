@@ -26,13 +26,11 @@ if "postgresql+psycopg" not in PGURL:
 
 
 # ---- TEMP DEBUG: inspect connection string & connectivity ----
-import streamlit as st
-from urllib.parse import urlparse, unquote
-import socket
-import psycopg
+# ---- robust parse of host/port ----
+from urllib.parse import urlsplit
+import re, streamlit as st
 
 def _mask(url: str) -> str:
-    # hide the password but keep everything else visible
     try:
         scheme, rest = url.split("://", 1)
         creds, hostpart = rest.split("@", 1)
@@ -41,21 +39,21 @@ def _mask(url: str) -> str:
     except Exception:
         return url
 
-st.markdown("### 🔧 DB Connection Debug (temporary)")
-if not PGURL:
-    st.error("PGURL_VIEW/PGURL is empty (secrets not set)."); st.stop()
+sp = urlsplit(PGURL.replace("postgresql+psycopg", "postgresql"))
+netloc = sp.netloc or ""              # e.g. "analytics_ro:***@abc.pooler.supabase.com:6543"
+hostpart = netloc.split("@")[-1]      # drop credentials if present
+hostpart = hostpart.strip()
 
-# 1) Parse URL parts to catch typos
-parsed = urlparse(PGURL.replace("postgresql+psycopg", "postgresql"))
-host = parsed.hostname or ""
-port = parsed.port
-db   = (parsed.path or "/").lstrip("/") or "(none)"
-ssl  = parsed.query or ""
+# extract host and a numeric port if present
+m = re.match(r"^(?P<host>[^:\s]+)(?::(?P<port>\d+))?$", hostpart)
+host = m.group("host") if m else hostpart
+port = int(m.group("port")) if (m and m.group("port")) else None
+
 st.write("Engine URL:", _mask(PGURL))
 st.write("Parsed host:", host)
 st.write("Parsed port:", port)
-st.write("Parsed database:", db)
-st.write("SSL params:", ssl)
+st.write("SSL param present:", "sslmode=require" in (sp.query or ""))
+
 
 # Quick checks:
 st.write("✅ Driver ok:", PGURL.startswith("postgresql+psycopg://"))
