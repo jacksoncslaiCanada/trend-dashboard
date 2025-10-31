@@ -1,32 +1,40 @@
-# -----------------------------------------------------------
-# 1️⃣ Imports and page setup
-# -----------------------------------------------------------
 import os
-from urllib.parse import quote_plus
-import pandas as pd
 import streamlit as st
+from urllib.parse import quote_plus
 from sqlalchemy import create_engine, text
 
 st.set_page_config(page_title="Tech Trend Dashboard", layout="wide")
 
-# -----------------------------------------------------------
-# 2️⃣ Build PGURL safely from secrets (💡 insert THIS block here)
-# -----------------------------------------------------------
+def _get(name: str, default: str = "") -> str:
+    # Prefer Streamlit secrets; fall back to env for local dev
+    try:
+        v = st.secrets[name]
+        if isinstance(v, (int, float)): v = str(v)
+        return (v or "").strip()
+    except Exception:
+        return (os.environ.get(name, default) or "").strip()
 
-# Read from Streamlit Secrets TOML (you added DB_HOST, DB_USER, etc.)
-host = (os.environ.get("DB_HOST") or "").strip()
-port = int(os.environ.get("DB_PORT", "6543"))
-name = (os.environ.get("DB_NAME") or "postgres").strip()
-user = (os.environ.get("DB_USER") or "analytics_ro").strip()
-pwd  = quote_plus(os.environ.get("DB_PASSWORD", ""))  # URL-encode safely
-ssl  = (os.environ.get("DB_SSLMODE") or "require").strip()
+host = _get("DB_HOST")
+port = int(_get("DB_PORT", "6543") or "6543")
+name = _get("DB_NAME", "postgres") or "postgres"
+user = _get("DB_USER", "analytics_ro") or "analytics_ro"
+pwd_raw = _get("DB_PASSWORD")
+ssl = _get("DB_SSLMODE", "require") or "require"
 
-if not (host and user and pwd):
-    st.error("Missing DB_* secrets. Please set DB_HOST/DB_USER/DB_PASSWORD in Secrets.")
-    st.stop()
+if not (host and user and pwd_raw):
+    st.error("Missing DB_* secrets. Set DB_HOST/DB_USER/DB_PASSWORD in Settings → Secrets."); st.stop()
+
+# URL-encode password only
+pwd = quote_plus(pwd_raw)
 
 PGURL = f"postgresql+psycopg://{user}:{pwd}@{host}:{port}/{name}?sslmode={ssl}"
-st.caption(f"Using host: {host}:{port}")  # optional visible sanity check
+engine = create_engine(PGURL, pool_pre_ping=True)
+
+@st.cache_data(ttl=300)
+def q(sql: str, **params):
+    with engine.begin() as cx:
+        return st.session_state.get("_pd_read_sql", __import__("pandas")).read_sql(text(sql), cx, params=params)
+
 
 
 # ---- TEMP DEBUG: inspect connection string & connectivity ----
