@@ -1,12 +1,18 @@
+# -----------------------------------------------------------
+# Tech Trend Dashboard (Supabase → Streamlit)
+# -----------------------------------------------------------
 import os
-import streamlit as st
 from urllib.parse import quote_plus
-from sqlalchemy import create_engine, text
+from datetime import datetime
+import pandas as pd
+import streamlit as st
+from sqlalchemy import create_engine, text as sql_text
 
 st.set_page_config(page_title="Tech Trend Dashboard", layout="wide")
 
-def _get(name: str, default: str = "") -> str:
-    # Prefer Streamlit secrets; fall back to env for local dev
+# ---------- 1) Secrets / Env loader (supports DB_* keys and PGURL_VIEW) ----------
+def _get_secret(name: str, default: str = "") -> str:
+    # Prefer Streamlit Cloud secrets; fall back to environment (local dev)
     try:
         v = st.secrets[name]
         if isinstance(v, (int, float)): v = str(v)
@@ -14,94 +20,69 @@ def _get(name: str, default: str = "") -> str:
     except Exception:
         return (os.environ.get(name, default) or "").strip()
 
-host = _get("DB_HOST")
-port = int(_get("DB_PORT", "6543") or "6543")
-name = _get("DB_NAME", "postgres") or "postgres"
-user = _get("DB_USER", "analytics_ro") or "analytics_ro"
-pwd_raw = _get("DB_PASSWORD")
-ssl = _get("DB_SSLMODE", "require") or "require"
+DB_HOST = _get_secret("DB_HOST")
+DB_PORT = _get_secret("DB_PORT", "6543") or "6543"
+DB_NAME = _get_secret("DB_NAME", "postgres") or "postgres"
+DB_USER = _get_secret("DB_USER", "analytics_ro") or "analytics_ro"
+DB_PASSWORD_RAW = _get_secret("DB_PASSWORD")
+DB_SSLMODE = _get_secret("DB_SSLMODE", "require") or "require"
+PGURL_DIRECT = _get_secret("PGURL_VIEW")  # optional single-URL fallback
 
-if not (host and user and pwd_raw):
-    st.error("Missing DB_* secrets. Set DB_HOST/DB_USER/DB_PASSWORD in Settings → Secrets."); st.stop()
+# Build URL safely
+if PGURL_DIRECT:
+    PGURL = PGURL_DIRECT.strip()
+else:
+    if not (DB_HOST and DB_USER and DB_PASSWORD_RAW):
+        st.error("Missing DB_* secrets. Set DB_HOST/DB_USER/DB_PASSWORD in Settings → Secrets (TOML).")
+        st.stop()
+    DB_PASSWORD = quote_plus(DB_PASSWORD_RAW)  # URL-encode password only
+    PGURL = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{int(DB_PORT)}/{DB_NAME}?sslmode={DB_SSLMODE}"
 
-# URL-encode password only
-pwd = quote_plus(pwd_raw)
-
-PGURL = f"postgresql+psycopg://{user}:{pwd}@{host}:{port}/{name}?sslmode={ssl}"
+# Create engine
 engine = create_engine(PGURL, pool_pre_ping=True)
 
-@st.cache_data(ttl=300)
-def q(sql: str, **params):
-    with engine.begin() as cx:
-        return st.session_state.get("_pd_read_sql", __import__("pandas")).read_sql(text(sql), cx, params=params)
+# ---------- 2) TEMP: visibility + connection debug (remove when green) ----------
+with st.expander("🔧 Secrets & DB connection debug (temporary)", expanded=False):
+    st.write("st.secrets keys:", list(getattr(st, "secrets", {}).keys()))
+    st.write("DB_HOST:", DB_HOST, "DB_PORT:", DB_PORT, "DB_NAME:", DB_NAME, "DB_USER:", DB_USER, "SSL:", DB_SSLMODE)
+    st.write("Using PGURL_VIEW (single URL):", bool(PGURL_DIRECT))
+    # DNS + raw connect
+    import socket, psycopg
+    # Parse host from DB_HOST or PGURL
+    host_for_dns = DB_HOST
+    if not host_for_dns and PGURL_DIRECT:
+        try:
+            from urllib.parse import urlsplit
+            sp = urlsplit(PGURL_DIRECT.replace("postgresql+psycopg", "postgresql"))
+            host_for_dns = (sp.hostname or "").strip()
+        except Exception:
+            host_for_dns = ""
+    try:
+        if host_for_dns:
+            socket.gethostbyname(host_for_dns)
+            st.success(f"DNS OK for {host_for_dns}")
+        else:
+            st.info("No host parsed for DNS test.")
+    except Exception as e:
+        st.error(f"DNS failed: {e!r}")
+    try:
+        psycopg.connect(PGURL, connect_timeout=5).close()
+        st.success("✅ psycopg.connect(): SUCCESS")
+    except Exception as e:
+        st.error(f"❌ psycopg.connect() failed: {type(e).__name__}: {e}")
 
-
-
-# ---- TEMP DEBUG: inspect connection string & connectivity ----
-import streamlit as st
-from urllib.parse import urlsplit, parse_qs
-import socket, psycopg, re
-
-st.markdown("### 🔧 DB Connection Debug (temporary)")
-
-PGURL = (os.environ.get("PGURL_VIEW") or os.environ.get("PGURL") or "").strip()
-if not PGURL:
-    st.error("❌ PGURL_VIEW/PGURL is empty or not set. Check Streamlit secrets."); st.stop()
-
-# Force psycopg driver if missing
-if "postgresql+psycopg" not in PGURL:
-    PGURL = PGURL.replace("postgresql://", "postgresql+psycopg://")
-
-# --- Safe parse host/port/sslmode ---
-sp = urlsplit(PGURL.replace("postgresql+psycopg", "postgresql"))
-netloc = sp.netloc or ""
-hostpart = netloc.split("@")[-1].strip()
-m = re.match(r"^(?P<host>[^:\s]+)(?::(?P<port>\d+))?$", hostpart)
-host = m.group("host") if m else hostpart
-port = int(m.group("port")) if (m and m.group("port")) else None
-qs = parse_qs(sp.query or "")
-sslmode = qs.get("sslmode", [""])[0]
-
-st.write("Engine URL (masked):", PGURL.split("@")[0] + ":***@" + host)
-st.write("Parsed host:", host)
-st.write("Parsed port:", port)
-st.write("Parsed database:", sp.path.lstrip("/") or "(none)")
-st.write("sslmode param:", sslmode or "(none)")
-
-# --- Quick validations ---
-st.write("✅ Driver ok:", PGURL.startswith("postgresql+psycopg://"))
-st.write("✅ Host ends with .pooler.supabase.com:", host.endswith(".pooler.supabase.com"))
-st.write("✅ Port = 6543:", port == 6543)
-st.write("✅ sslmode=require:", sslmode == "require")
-
-# --- DNS check ---
-try:
-    ips = socket.gethostbyname_ex(host)[2]
-    st.success(f"DNS OK: {host} -> {ips[:2]} (showing first 2 IPs)")
-except Exception as e:
-    st.error(f"❌ DNS lookup failed for '{host}': {e!r}")
-
-# --- Raw psycopg connection test ---
-try:
-    psycopg.connect(PGURL, connect_timeout=5).close()
-    st.success("✅ psycopg.connect(): SUCCESS")
-except Exception as e:
-    st.error(f"❌ psycopg.connect() failed: {type(e).__name__}: {e}")
-# ---- END DEBUG ----
-
-
-engine = create_engine(PGURL, pool_pre_ping=True)
-
+# ---------- 3) Query helper ----------
 @st.cache_data(ttl=300)
 def q(sql: str, **params) -> pd.DataFrame:
     with engine.begin() as cx:
-        return pd.read_sql(text(sql), cx, params=params)
+        return pd.read_sql(sql_text(sql), cx, params=params)
 
+# ---------- 4) UI ----------
 st.title("Daily Tech Trends")
 st.caption("Interactive view on your Supabase dataset")
 
-# --- Controls ---
-c1, c2, c3 = st.columns([1,1,2])
+# Controls
+c1, c2, c3 = st.columns([1, 1, 2])
 with c1:
     days = st.selectbox("Window (days)", [1, 7, 14, 30], index=1)
 with c2:
@@ -122,7 +103,7 @@ if qtext:
 
 sql_where = " AND ".join(where)
 
-# --- KPIs ---
+# KPIs
 kpi = q(f"""
 select
   count(*)::int as n_items,
@@ -130,13 +111,12 @@ select
 from items
 where {sql_where}
 """, **params)
-
 k1, k2, k3 = st.columns(3)
 k1.metric("Items", int(kpi["n_items"][0] or 0))
 k2.metric("Avg trend score", float(kpi["avg_score"][0] or 0))
 k3.metric("Last refresh (UTC)", datetime.utcnow().strftime("%Y-%m-%d %H:%M"))
 
-# --- Top items table ---
+# Top items table
 st.subheader("Top items")
 top = q(f"""
 select ts, source, title, url, trend_score
@@ -148,8 +128,9 @@ limit 100
 
 if not top.empty:
     top = top.assign(TitleLink=top.apply(lambda r: f"[{r['title']}]({r['url']})", axis=1))
-    top_display = top[["ts","source","TitleLink","trend_score"]].rename(
-        columns={"ts":"Time (UTC)","source":"Source","TitleLink":"Title","trend_score":"Trend score"})
+    top_display = top[["ts", "source", "TitleLink", "trend_score"]].rename(
+        columns={"ts": "Time (UTC)", "source": "Source", "TitleLink": "Title", "trend_score": "Trend score"}
+    )
     st.dataframe(
         top_display,
         use_container_width=True,
@@ -159,7 +140,7 @@ if not top.empty:
 else:
     st.info("No items match your filters.")
 
-# --- Volume by source ---
+# Volume by source
 st.subheader("Volume by source")
 by_src = q(f"""
 select source, count(*)::int as n
@@ -173,7 +154,7 @@ if not by_src.empty:
 else:
     st.info("No data for selected window/sources.")
 
-# --- Daily volume ---
+# Daily volume
 st.subheader(f"Daily volume (last {days}d)")
 by_day = q(f"""
 select date_trunc('day', ts) as day, count(*)::int as n
@@ -183,7 +164,8 @@ group by 1
 order by 1
 """, **params)
 if not by_day.empty:
-    by_day = by_day.rename(columns={"day":"date"}).set_index("date")
+    by_day = by_day.rename(columns={"day": "date"}).set_index("date")
     st.line_chart(by_day["n"])
 else:
     st.info("No daily data.")
+
